@@ -1,0 +1,123 @@
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IDE - Visual Studio
+.vs/
+*.suo
+*.ntvs*
+*.njsproj
+*/obj
+*/bin
+*/wwwroot
+
+# IDE - JetBrains
+.idea/
+*.iml
+*.iws
+
+# 依赖包目录
+node_modules/
+dist/
+build/
+
+# 日志文件
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# 临时文件
+*.tmp
+*.temp
+
+# 上传文件目录
+uploads/
+**/uploads/
+*/uploads/
+
+# .NET Core
+bin/
+obj/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+.vs/
+.vscode/
+*.dll
+*.exe
+*.pdb
+*.cache
+*.log
+
+# 发布文件
+**/publish/
+**/dist/
+**/wwwroot/
+
+# Node.js (Vite/Vue)
+node_modules/
+.DS_Store
+client/dist
+client/dist-ssr
+coverage
+*.local
+.env
+.env.*
+
+# 日志文件
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE配置文件
+.idea/
+*.sln.iml
+.project
+*.njsproj
+*.sw?
+
+# 临时文件
+[Tt]emp/
+[Tt]mp/
+*.tmp
+*.bak
+*.swp
+
+# Visual Studio 缓存/选项目录
+.vs/
+.vscode/
+*_i.c
+*_p.c
+*.ilk
+*.meta
+*.obj
+*.pch
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp_proj
+*.vspscc
+*.vssscc
+api/appsettings.json

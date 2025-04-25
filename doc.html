@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>数据采集系统操作手册</title>
+    <style>
+        body {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: "Microsoft YaHei", sans-serif;
+            line-height: 1.6;
+        }
+        h1, h2 {
+            color: #1890ff;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        img {
+            max-width: 100%;
+            border: 1px solid #ddd;
+            margin: 10px 0;
+        }
+        .tip {
+            background-color: #e6f7ff;
+            padding: 10px;
+            border-left: 4px solid #1890ff;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>数据采集系统操作手册</h1>
+
+    <div class="section">
+        <h2>1. 系统登录</h2>
+        <p>1.1 访问系统登录页面</p>
+        <p>1.2 输入用户名和密码</p>
+        <p>1.3 输入验证码（点击验证码图片可刷新）</p>
+        <p>1.4 点击登录按钮进入系统</p>
+        <div class="tip">注意：若验证码无法识别，可点击验证码图片进行刷新</div>
+    </div>
+
+    <div class="section">
+        <h2>2. 厂站管理</h2>
+        <p>2.1 添加厂站</p>
+        <ul>
+            <li>点击右上角"添加厂站"按钮</li>
+            <li>填写厂站名称</li>
+            <li>填写厂站ID（唯一标识）</li>
+            <li>填写数据库连接字符串</li>
+            <li>点击确定保存</li>
+        </ul>
+        
+        <p>2.2 编辑厂站</p>
+        <ul>
+            <li>在厂站列表中找到需要编辑的厂站</li>
+            <li>点击"编辑"按钮</li>
+            <li>修改相关信息</li>
+            <li>点击确定保存</li>
+        </ul>
+
+        <p>2.3 删除厂站</p>
+        <ul>
+            <li>在厂站列表中找到需要删除的厂站</li>
+            <li>点击"删除"按钮</li>
+            <li>在确认对话框中点击确定</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>3. 采集配置</h2>
+        <p>3.1 配置采集表</p>
+        <ul>
+            <li>在厂站列表中点击"采集配置"按钮</li>
+            <li>在左侧列表中选择需要采集的数据表</li>
+            <li>点击中间的向右箭头将表添加到右侧</li>
+            <li>可以使用搜索功能快速查找表</li>
+            <li>点击右上角"保存配置"按钮保存设置</li>
+        </ul>
+
+        <div class="tip">
+            提示：
+            <ul>
+                <li>左侧显示所有可选的数据表</li>
+                <li>右侧显示已配置要采集的数据表</li>
+                <li>可以随时调整配置，添加或移除需要采集的表</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>4. 连接字符串格式说明</h2>
+        <p>标准格式：</p>
+        <pre>Data Source=服务器地址;Initial Catalog=数据库名;User ID=用户名;Password=密码;</pre>
+        <p>示例：</p>
+        <pre>Data Source=.;Initial Catalog=DBName;User ID=sa;Password=123456;</pre>
+        <div class="tip">
+            注意：请确保提供的数据库连接信息正确，且数据库用户具有适当的访问权限。
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>5. 常见问题</h2>
+        <p>5.1 无法连接数据库</p>
+        <ul>
+            <li>检查连接字符串格式是否正确</li>
+            <li>确认数据库服务器是否可访问</li>
+            <li>验证用户名和密码是否正确</li>
+            <li>检查网络连接是否正常</li>
+        </ul>
+
+        <p>5.2 采集配置不生效</p>
+        <ul>
+            <li>确保已点击"保存配置"按钮</li>
+            <li>检查数据库用户是否有相应表的读取权限</li>
+            <li>刷新页面查看最新配置</li>
+        </ul>
+    </div>
+</body>
+</html>
