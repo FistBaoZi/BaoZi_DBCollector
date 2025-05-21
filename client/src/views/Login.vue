@@ -79,7 +79,7 @@ const captchaUrl = ref('')
 
 const refreshCaptcha = () => {
   captchaId.value = Date.now().toString()
-  captchaUrl.value = `/User/Captcha?seed=${captchaId.value}`
+  captchaUrl.value = (import.meta.env.MODE === 'development' ? '/api' : '')+`/User/Captcha?seed=${captchaId.value}`
 }
 
 const handleSubmit = async () => {
