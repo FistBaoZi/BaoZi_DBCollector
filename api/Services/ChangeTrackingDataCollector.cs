@@ -225,9 +225,9 @@ namespace dbcollector_api.Services
             var sourceSchema = await GetSourceTableSchemaAsync();
             var targetSchema = await GetTargetTableSchemaAsync();
 
-            // 找出源表有但目标表没有的字段
+            // 使用不区分大小写的字段比较
             var newColumns = sourceSchema
-                .Where(s => !targetSchema.ContainsKey(s.Key))
+                .Where(s => !targetSchema.Keys.Any(t => t.Equals(s.Key, StringComparison.OrdinalIgnoreCase)))
                 .ToList();
 
             if (newColumns.Any())
@@ -259,30 +259,64 @@ namespace dbcollector_api.Services
         /// <summary>
         /// 创建目标表，并在原有结构的基础上添加 siteid 字段，并使用规范化的数据类型。
         /// </summary>
-        private async Task CreateTargetTableAsync(Dictionary<string, string> columnSchema)
+        private async Task CreateTargetTableAsync(Dictionary<string, string> sourceColumnSchema)
         {
-            if (await TargetTableExistsAsync())
+            // 检查表是否存在
+            if (!await TargetTableExistsAsync())
             {
-                return; // 表已存在，无需创建
+                // 表不存在时创建表
+                List<string> columnDefinitions = new List<string>();
+                foreach (var kvp in sourceColumnSchema)
+                {
+                    columnDefinitions.Add($"{kvp.Key} {kvp.Value}");
+                }
+                columnDefinitions.Add("bz_ct_siteid VARCHAR(50)"); // 添加带前缀的站点ID字段
+
+                string createTableSql = $"CREATE TABLE {_targetTableName} ({string.Join(",", columnDefinitions)});";
+                var result = await _targetDbHelper.UpdateAsync(createTableSql);
+                if (!string.IsNullOrWhiteSpace(result.Message))
+                {
+                    Console.WriteLine($"创建目标表 {_targetTableName} 失败: {result.Message}");
+                }
+                else
+                {
+                    Console.WriteLine($"目标表 {_targetTableName} 创建成功。");
+                }
+                return;
             }
 
-            List<string> columnDefinitions = new List<string>();
-            foreach (var kvp in columnSchema)
-            {
-                columnDefinitions.Add($"{kvp.Key} {kvp.Value}");
-            }
-            columnDefinitions.Add("bz_ct_siteid VARCHAR(50)"); // 添加带前缀的站点ID字段
+            // 表已存在，获取目标表当前结构
+            var targetSchema = await GetTargetTableSchemaAsync();
 
-            string createTableSql = $"CREATE TABLE {_targetTableName} ({string.Join(",", columnDefinitions)});";
-            var result = await _targetDbHelper.UpdateAsync(createTableSql);
-            if (!string.IsNullOrWhiteSpace(result.Message))
+            // 使用 StringComparer.OrdinalIgnoreCase 进行不区分大小写的字段比较
+            var missingColumns = sourceColumnSchema
+                .Where(s => !targetSchema.Keys.Any(t => t.Equals(s.Key, StringComparison.OrdinalIgnoreCase)))
+                .ToList();
+
+            // 添加缺失的字段
+            if (missingColumns.Any())
             {
-                Console.WriteLine($"创建目标表 {_targetTableName} 失败: {result.Message}");
-                // TODO: 考虑抛出异常或进行重试
-            }
-            else
-            {
-                Console.WriteLine($"目标表 {_targetTableName} 创建成功。");
+                Console.WriteLine($"在目标表 {_targetTableName} 中发现 {missingColumns.Count} 个新字段，开始添加...");
+                foreach (var col in missingColumns)
+                {
+                    string alterSql = $"ALTER TABLE {_targetTableName} ADD {col.Key} {col.Value};";
+                    try
+                    {
+                        var result = await _targetDbHelper.UpdateAsync(alterSql);
+                        if (string.IsNullOrWhiteSpace(result.Message))
+                        {
+                            Console.WriteLine($"成功添加字段: {col.Key} {col.Value}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"添加字段失败 {col.Key}: {result.Message}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"添加字段失败 {col.Key}: {ex.Message}");
+                    }
+                }
             }
         }
 
@@ -343,6 +377,10 @@ namespace dbcollector_api.Services
                 return;
             }
 
+            // 在插入数据前先检查并更新表结构
+            await SyncTableSchemaAsync();
+
+            // 获取最新的表结构（包含可能新增的列）
             List<string> targetColumns = new List<string>((await GetSourceTableSchemaAsync()).Keys);
             targetColumns.Add("bz_ct_siteid");
 
@@ -595,6 +633,57 @@ namespace dbcollector_api.Services
                         Console.WriteLine($"厂站 {_siteId}{_sourceTableName}没有新的数据变更。");
                     }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 检查数据采集的一致性
+        /// </summary>
+        /// <returns>返回true表示数据一致，false表示数据不一致</returns>
+        private async Task<bool> CheckDataConsistencyAsync()
+        {
+            // 获取目标表最后两条记录的ID
+            string targetSql = $@"
+                SELECT TOP 2 {_primaryKeyColumn}
+                FROM {_targetTableName}
+                WHERE bz_ct_siteid = @siteId
+                ORDER BY {_primaryKeyColumn} DESC";
+
+            // 获取源表最后两条记录的ID
+            string sourceSql = $@"
+                SELECT TOP 2 {_primaryKeyColumn}
+                FROM {_sourceTableName}
+                ORDER BY {_primaryKeyColumn} DESC";
+
+            try
+            {
+                var targetResult = await _targetDbHelper.FindAsync(targetSql, new Parameter("@siteId", _siteId));
+                var sourceResult = await _sourceDbHelper.FindAsync(sourceSql);
+
+                if (targetResult.Result == null || sourceResult.Result == null || 
+                    targetResult.Result.Count < 2 || sourceResult.Result.Count < 2)
+                {
+                    Console.WriteLine($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 记录数不足，无法进行一致性检查");
+                    return true;
+                }
+
+                var targetSecondLastId = targetResult.Result[1][_primaryKeyColumn].ToObject<long>();
+                var sourceSecondLastId = sourceResult.Result[1][_primaryKeyColumn].ToObject<long>();
+
+                if (targetSecondLastId != sourceSecondLastId)
+                {
+                    Console.WriteLine($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 数据采集异常");
+                    Console.WriteLine($"源表倒数第二条记录ID: {sourceSecondLastId}");
+                    Console.WriteLine($"目标表倒数第二条记录ID: {targetSecondLastId}");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"检查数据一致性时发生错误 (SiteId: {_siteId}): {ex.Message}");
+                return false;
             }
         }
     }
