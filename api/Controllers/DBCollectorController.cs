@@ -16,9 +16,9 @@ namespace dbcollector_api.Controllers
             _service = service;
         }
 
-        public async Task<List<StationConfig>> List()
+        public  List<StationConfig> List()
         {
-            return  await _service.GetStationListAsync();
+            return  _service.GetStationList();
         }
 
         public async Task Add(StationConfig station)

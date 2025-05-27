@@ -73,7 +73,7 @@ var dbCollectorService = app.Services.GetService<DBCollectorService>();
 await dbCollectorService.EnsureStationTableExistsAsync();
 
 //初始化采集定时任务
-await dbCollectorService.InitCTTimerTask();
+dbCollectorService.InitCTTimerTask();
 app.UseStaticFiles();
 app.MapControllers();
 //配置路由

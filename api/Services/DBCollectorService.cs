@@ -11,6 +11,7 @@ namespace dbcollector_api.Services
         private readonly IBaseDBHelper DBCenter;
         private const string STATION_TABLE_NAME = "StationConfig";
         private const string TABLE_CONFIG_NAME = "CollectTableConfig";
+        private const string FULL_SYNC_STATE_TABLE = "FullSyncState";
         private readonly TimerTaskService TimerTaskService;
         private readonly IConfiguration _cfg;
         public DBCollectorService(IBaseDBHelper baseDBHelper, TimerTaskService timerTaskService, IConfiguration cfg)
@@ -53,10 +54,10 @@ namespace dbcollector_api.Services
             await DBCenter.UpdateAsync(sql);
         }
 
-        public async Task<List<StationConfig>> GetStationListAsync()
+        public List<StationConfig> GetStationList()
         {
             string sql = $"SELECT * FROM {STATION_TABLE_NAME} ORDER BY CreateTime DESC";
-            var res = await DBCenter.FindAsync<StationConfig>(sql);
+            var res =  DBCenter.Find<StationConfig>(sql);
             return res.Result;
         }
 
@@ -183,13 +184,6 @@ namespace dbcollector_api.Services
             string deleteSql = $"DELETE FROM {TABLE_CONFIG_NAME} WHERE StationId = @stationId";
             await DBCenter.DeleteAsync(deleteSql, new Parameter("@stationId", stationId));
 
-            //删除站点的所有定时任务
-            var tasks = TimerTaskService.TaskNameList;
-            foreach (var item in tasks)
-            {
-               JobManager.RemoveJob(item);
-            }
-
             //根据站点ID获取站点信息
             var station = await GetStationByIdAsync(stationId);
             //定义原数据库帮助类
@@ -214,29 +208,41 @@ namespace dbcollector_api.Services
                         WHERE TABLE_NAME = @tableName AND CONSTRAINT_NAME LIKE '%PK%'";
                     var res = await sourceDb.FindOneAsync(primaryKeySql, new Parameter("@tableName", table));
                     var primaryKey = res.Result?.Value<string>("COLUMN_NAME");
-
-                    await AddTableCTTimerTask(new ChangeTrackingDataCollector(sourceDb, DBCenter, table, table, primaryKey, stationId));
                 }
             }
         }
 
-        //添加表采集定时任务
-        public async Task AddTableCTTimerTask(ChangeTrackingDataCollector ct)
+       
+        public void InitCTTimerTask()
         {
-            await TimerTaskService.AddTimerTask(new TimerTaskMod(ct._siteId + ct._targetTableName, () =>
+            //添加两个定时任务，一个采集全量，一个采集增量
+            JobManager.AddJob(() =>
             {
-                 ct.CollectDataAsync().GetAwaiter().GetResult();
-            }, new EverySecond(int.Parse(_cfg["CollectInterval"]))));
+                DoCT(0);
+            }, s => {
+                s.NonReentrant();
+                s.ToRunNow().AndEvery(int.Parse(_cfg["CollectInterval"])).Seconds();
+            });
+            JobManager.AddJob(() =>
+            {
+                DoCT(1);
+            }, s =>
+            {
+                s.NonReentrant();
+                s.ToRunNow().AndEvery(int.Parse(_cfg["CollectInterval"])).Seconds();
+            });
         }
-        public async Task InitCTTimerTask()
+        private void DoCT(int isFull)
         {
             //获取所有站点
-            var stations = await GetStationListAsync();
+            var stations = GetStationList();
             //循环遍历站点
-            foreach (var station in stations) {
+            foreach (var station in stations)
+            {
                 // 获取已配置的表
-                string selectedTablesSql = $"SELECT TableName FROM {TABLE_CONFIG_NAME} WHERE StationId = @stationId";
-                var selectedTables = await DBCenter.FindAsync(selectedTablesSql, new Parameter("@stationId", station.StationId));
+                string selectedTablesSql = @$"SELECT a.TableName FROM {TABLE_CONFIG_NAME} a inner join
+{FULL_SYNC_STATE_TABLE} b on a.TableName = b.TableName and a.StationId = b.SiteId WHERE StationId = @stationId and  b.IsCompleted = {isFull}";
+                var selectedTables = DBCenter.Find(selectedTablesSql, new Parameter("@stationId", station.StationId));
 
                 //拿到厂站的dbhelper
                 var sourceDb = new SqlServerDBHelper(station.ConnectionString, station.StationId);
@@ -249,12 +255,11 @@ namespace dbcollector_api.Services
                         SELECT COLUMN_NAME 
                         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
                         WHERE TABLE_NAME = '{table["TableName"].ToString()}' AND CONSTRAINT_NAME LIKE '%PK%'";
-                    var res = await sourceDb.FindOneAsync(primaryKeySql);
+                    var res = sourceDb.FindOne(primaryKeySql);
                     var primaryKey = res.Result?.Value<string>("COLUMN_NAME");
-                    //添加定时任务
-                    await AddTableCTTimerTask(new ChangeTrackingDataCollector(sourceDb, DBCenter, table.Value<string>("TableName"), table.Value<string>("TableName"), primaryKey, station.StationId));
+                    var ct = new ChangeTrackingDataCollector(sourceDb, DBCenter, table.Value<string>("TableName"), table.Value<string>("TableName"), primaryKey, station.StationId);
+                    ct.CollectData();
                 }
-
             }
         }
     }

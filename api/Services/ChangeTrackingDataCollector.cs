@@ -23,10 +23,10 @@ namespace dbcollector_api.Services
             _targetTableName = targetTableName;
             _primaryKeyColumn = primaryKeyColumn;
             _siteId = siteId;
-            _lastSyncVersion = GetLastSyncVersionFromConfig().Result;
+            _lastSyncVersion = GetLastSyncVersionFromConfig();
         }
 
-        private async Task EnsureVersionTableExistsAsync()
+        private void EnsureVersionTableExists()
         {
             string sql = $@"
                 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '{VERSION_TABLE_NAME}')
@@ -40,10 +40,10 @@ namespace dbcollector_api.Services
                     );
                     CREATE INDEX IX_{VERSION_TABLE_NAME}_SiteId_Table ON {VERSION_TABLE_NAME}(SiteId, TableName, CreateTime);
                 END";
-            await _targetDbHelper.UpdateAsync(sql);
+            _targetDbHelper.Update(sql);
         }
 
-        private async Task EnsureFullSyncStateTableExistsAsync()
+        private void EnsureFullSyncStateTableExists()
         {
             string sql = $@"
                 IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '{FULL_SYNC_STATE_TABLE}')
@@ -59,31 +59,31 @@ namespace dbcollector_api.Services
                     );
                     CREATE INDEX IX_{FULL_SYNC_STATE_TABLE}_Key ON {FULL_SYNC_STATE_TABLE}(SiteId, TableName);
                 END";
-            await _targetDbHelper.UpdateAsync(sql);
+            _targetDbHelper.Update(sql);
         }
 
-        private async Task CleanupOldVersionsAsync()
+        private void CleanupOldVersions()
         {
             string sql = $@"
                 DELETE FROM {VERSION_TABLE_NAME} 
                 WHERE SiteId = @siteId 
                 AND TableName = @tableName
                 AND CreateTime < DATEADD(day, -3, GETDATE())";
-            await _targetDbHelper.DeleteAsync(sql,
+            _targetDbHelper.Delete(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName));
         }
 
-        private async Task<long> GetLastSyncVersionFromConfig()
+        private long GetLastSyncVersionFromConfig()
         {
-            await EnsureVersionTableExistsAsync();
+            EnsureVersionTableExists();
             string sql = $@"
                 SELECT TOP 1 Version 
                 FROM {VERSION_TABLE_NAME} 
                 WHERE SiteId = @siteId 
                 AND TableName = @tableName
                 ORDER BY CreateTime DESC";
-            var result = await _targetDbHelper.FindOneAsync(sql,
+            var result = _targetDbHelper.FindOne(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName));
             if (result.Result != null && result.Result["Version"] != null)
@@ -93,16 +93,16 @@ namespace dbcollector_api.Services
             return 0;
         }
 
-        private async Task SaveCurrentSyncVersionToConfig(long currentVersion)
+        private void SaveCurrentSyncVersionToConfig(long currentVersion)
         {
-            await EnsureVersionTableExistsAsync();
-            await CleanupOldVersionsAsync();
+            EnsureVersionTableExists();
+            CleanupOldVersions();
 
             string sql = $@"
                     INSERT INTO {VERSION_TABLE_NAME} (SiteId, TableName, Version,CreateTime)
                     VALUES (@siteId, @tableName, @version,getdate())";
 
-            await _targetDbHelper.InsertAsync(sql,
+            _targetDbHelper.Insert(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName),
                 new Parameter("@version", currentVersion));
@@ -110,33 +110,33 @@ namespace dbcollector_api.Services
             _lastSyncVersion = currentVersion;
         }
 
-        private async Task<bool> TargetTableExistsAsync()
+        private bool TargetTableExists()
         {
             string sql = $"IF OBJECT_ID('dbo.{_targetTableName}', 'U') IS NOT NULL SELECT 1 as havetable  ELSE SELECT 0 as havetable ;";
-            var result = await _targetDbHelper.FindOneAsync(sql);
+            var result = _targetDbHelper.FindOne(sql);
             return result.Result["havetable"].ToObject<int>() == 1;
         }
 
-        private async Task<bool> TargetTableContainsSiteDataAsync()
+        private bool TargetTableContainsSiteData()
         {
-            if (!await TargetTableExistsAsync())
+            if (!TargetTableExists())
             {
                 return false;
             }
             string sql = $"SELECT TOP 1 1 as havedata FROM {_targetTableName} WHERE bz_ct_siteid = @siteId;";
-            var result = await _targetDbHelper.FindOneAsync(sql, new Parameter("@siteId", _siteId));
+            var result = _targetDbHelper.FindOne(sql, new Parameter("@siteId", _siteId));
             return result.Result["havedata"].ToObject<int>() == 1;
         }
 
         /// <summary>
         /// 获取源表的结构并进行类型转换。
         /// </summary>
-        private async Task<Dictionary<string, string>> GetSourceTableSchemaAsync()
+        private Dictionary<string, string> GetSourceTableSchema()
         {
             string sql = $@"SELECT COLUMN_NAME, DATA_TYPE
                            FROM INFORMATION_SCHEMA.COLUMNS
                            WHERE TABLE_NAME = @tableName;";
-            var result = await _sourceDbHelper.FindAsync<JObject>(sql, new Parameter("@tableName", _sourceTableName));
+            var result = _sourceDbHelper.Find<JObject>(sql, new Parameter("@tableName", _sourceTableName));
             var schemaMap = new Dictionary<string, string>();
             if (result.Result != null)
             {
@@ -190,12 +190,12 @@ namespace dbcollector_api.Services
         /// <summary>
         /// 获取目标表的当前结构
         /// </summary>
-        private async Task<Dictionary<string, string>> GetTargetTableSchemaAsync()
+        private Dictionary<string, string> GetTargetTableSchema()
         {
             string sql = $@"SELECT COLUMN_NAME, DATA_TYPE 
                            FROM INFORMATION_SCHEMA.COLUMNS 
                            WHERE TABLE_NAME = @tableName;";
-            var result = await _targetDbHelper.FindAsync<JObject>(sql, new Parameter("@tableName", _targetTableName));
+            var result = _targetDbHelper.Find<JObject>(sql, new Parameter("@tableName", _targetTableName));
             var schemaMap = new Dictionary<string, string>();
             
             if (result.Result != null)
@@ -213,17 +213,17 @@ namespace dbcollector_api.Services
         /// <summary>
         /// 检查并更新表结构
         /// </summary>
-        private async Task SyncTableSchemaAsync()
+        private void SyncTableSchema()
         {
-            if (!await TargetTableExistsAsync())
+            if (!TargetTableExists())
             {
-                var sourceSchema2 = await GetSourceTableSchemaAsync();
-                await CreateTargetTableAsync(sourceSchema2);
+                var sourceSchema2 = GetSourceTableSchema();
+                CreateTargetTable(sourceSchema2);
                 return;
             }
 
-            var sourceSchema = await GetSourceTableSchemaAsync();
-            var targetSchema = await GetTargetTableSchemaAsync();
+            var sourceSchema = GetSourceTableSchema();
+            var targetSchema = GetTargetTableSchema();
 
             // 使用不区分大小写的字段比较
             var newColumns = sourceSchema
@@ -238,7 +238,7 @@ namespace dbcollector_api.Services
                     string alterSql = $"ALTER TABLE {_targetTableName} ADD {col.Key} {col.Value};";
                     try 
                     {
-                        var result = await _targetDbHelper.UpdateAsync(alterSql);
+                        var result = _targetDbHelper.Update(alterSql);
                         if (string.IsNullOrWhiteSpace(result.Message))
                         {
                             Console.WriteLine($"成功添加字段: {col.Key} {col.Value}");
@@ -259,10 +259,10 @@ namespace dbcollector_api.Services
         /// <summary>
         /// 创建目标表，并在原有结构的基础上添加 siteid 字段，并使用规范化的数据类型。
         /// </summary>
-        private async Task CreateTargetTableAsync(Dictionary<string, string> sourceColumnSchema)
+        private void CreateTargetTable(Dictionary<string, string> sourceColumnSchema)
         {
             // 检查表是否存在
-            if (!await TargetTableExistsAsync())
+            if (!TargetTableExists())
             {
                 // 表不存在时创建表
                 List<string> columnDefinitions = new List<string>();
@@ -273,7 +273,7 @@ namespace dbcollector_api.Services
                 columnDefinitions.Add("bz_ct_siteid VARCHAR(50)"); // 添加带前缀的站点ID字段
 
                 string createTableSql = $"CREATE TABLE {_targetTableName} ({string.Join(",", columnDefinitions)});";
-                var result = await _targetDbHelper.UpdateAsync(createTableSql);
+                var result = _targetDbHelper.Update(createTableSql);
                 if (!string.IsNullOrWhiteSpace(result.Message))
                 {
                     Console.WriteLine($"创建目标表 {_targetTableName} 失败: {result.Message}");
@@ -286,7 +286,7 @@ namespace dbcollector_api.Services
             }
 
             // 表已存在，获取目标表当前结构
-            var targetSchema = await GetTargetTableSchemaAsync();
+            var targetSchema = GetTargetTableSchema();
 
             // 使用 StringComparer.OrdinalIgnoreCase 进行不区分大小写的字段比较
             var missingColumns = sourceColumnSchema
@@ -302,7 +302,7 @@ namespace dbcollector_api.Services
                     string alterSql = $"ALTER TABLE {_targetTableName} ADD {col.Key} {col.Value};";
                     try
                     {
-                        var result = await _targetDbHelper.UpdateAsync(alterSql);
+                        var result = _targetDbHelper.Update(alterSql);
                         if (string.IsNullOrWhiteSpace(result.Message))
                         {
                             Console.WriteLine($"成功添加字段: {col.Key} {col.Value}");
@@ -320,10 +320,10 @@ namespace dbcollector_api.Services
             }
         }
 
-        private async Task<long> GetCurrentChangeTrackingVersionAsync()
+        private long GetCurrentChangeTrackingVersion()
         {
             string sql = "SELECT CHANGE_TRACKING_CURRENT_VERSION() AS CurrentVersion;";
-            var result = await _sourceDbHelper.FindOneAsync<JObject>(sql);
+            var result = _sourceDbHelper.FindOne<JObject>(sql);
             if (result.Result != null && result.Result.ContainsKey("CurrentVersion"))
             {
                 return result.Result.Value<long>("CurrentVersion");
@@ -335,12 +335,12 @@ namespace dbcollector_api.Services
             }
         }
 
-        private async Task<JArray> GetChangesAsync()
+        private JArray GetChanges()
         {
             if (_lastSyncVersion == 0)
             {
                 Console.WriteLine($"尚未进行首次同步 (SiteId: {_siteId})。");
-                return await GetAllSourceDataAsync();
+                return GetAllSourceData();
             }
 
             string sql = $@"
@@ -348,7 +348,7 @@ namespace dbcollector_api.Services
                 FROM CHANGETABLE(CHANGES {_sourceTableName}, {_lastSyncVersion}) AS CT
                 LEFT JOIN {_sourceTableName} AS T ON CT.{_primaryKeyColumn} = T.{_primaryKeyColumn};";
 
-            var result = await _sourceDbHelper.FindAsync(sql);
+            var result = _sourceDbHelper.Find(sql);
             if (result.Result != null)
             {
                 return result.Result;
@@ -360,17 +360,17 @@ namespace dbcollector_api.Services
             }
         }
 
-        private async Task<JArray> GetAllSourceDataAsync(long lastId = 0, int pageSize = 1000)
+        private JArray GetAllSourceData(long lastId = 0, int pageSize = 1000)
         {
             string sql = $@"SELECT TOP {pageSize} * 
                            FROM {_sourceTableName} 
                            WHERE {_primaryKeyColumn} > @lastId 
                            ORDER BY {_primaryKeyColumn}";
-            var result = await _sourceDbHelper.FindAsync(sql, new Parameter("@lastId", lastId));
+            var result = _sourceDbHelper.Find(sql, new Parameter("@lastId", lastId));
             return result.Result ?? new JArray();
         }
 
-        private async Task BulkInsertDataAsync(JArray dataToInsert)
+        private void BulkInsertData(JArray dataToInsert)
         {
             if (!dataToInsert.Any())
             {
@@ -378,10 +378,10 @@ namespace dbcollector_api.Services
             }
 
             // 在插入数据前先检查并更新表结构
-            await SyncTableSchemaAsync();
+            SyncTableSchema();
 
             // 获取最新的表结构（包含可能新增的列）
-            List<string> targetColumns = new List<string>((await GetSourceTableSchemaAsync()).Keys);
+            List<string> targetColumns = new List<string>(GetSourceTableSchema().Keys);
             targetColumns.Add("bz_ct_siteid");
 
             // 构建更新和插入SQL
@@ -405,7 +405,7 @@ namespace dbcollector_api.Services
                         new Parameter("@primaryKey", data[_primaryKeyColumn]?.ToString()),
                         new Parameter("@siteId", _siteId)
                     };
-                    var checkResult = await _targetDbHelper.FindOneAsync(checkSql, checkParams);
+                    var checkResult = _targetDbHelper.FindOne(checkSql, checkParams);
 
                     List<Parameter> parameters = new List<Parameter>();
                     foreach (var column in targetColumns.Where(c => c != "bz_ct_siteid"))
@@ -429,7 +429,7 @@ namespace dbcollector_api.Services
 
                     if (checkResult.Result != null)
                     {
-                        var updateResult = await _targetDbHelper.UpdateAsync(updateSql, parameters.ToArray());
+                        var updateResult = _targetDbHelper.Update(updateSql, parameters.ToArray());
                         if (!string.IsNullOrWhiteSpace(updateResult.Message))
                         {
                             Console.WriteLine($"更新数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {updateResult.Message}");
@@ -437,7 +437,7 @@ namespace dbcollector_api.Services
                     }
                     else
                     {
-                        var insertResult = await _targetDbHelper.InsertAsync(insertSql, parameters.ToArray());
+                        var insertResult = _targetDbHelper.Insert(insertSql, parameters.ToArray());
                         if (!string.IsNullOrWhiteSpace(insertResult.Message))
                         {
                             Console.WriteLine($"插入数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {insertResult.Message}");
@@ -453,9 +453,9 @@ namespace dbcollector_api.Services
             Console.WriteLine($"成功处理 {dataToInsert.Count} 条数据到 {_targetTableName} (SiteId: {_siteId})。");
         }
 
-        private async Task<(bool needFullSync, long lastSyncId)> CheckFullSyncStatusAsync()
+        private (bool needFullSync, long lastSyncId) CheckFullSyncStatus()
         {
-            await EnsureFullSyncStateTableExistsAsync();
+            EnsureFullSyncStateTableExists();
             
             string sql = $@"
                 SELECT LastSyncId, IsCompleted 
@@ -463,7 +463,7 @@ namespace dbcollector_api.Services
                 WHERE SiteId = @siteId 
                 AND TableName = @tableName";
                 
-            var result = await _targetDbHelper.FindOneAsync(sql,
+            var result = _targetDbHelper.FindOne(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName));
 
@@ -478,7 +478,7 @@ namespace dbcollector_api.Services
             return (!isCompleted, lastSyncId); // 如果未完成,则需要续采
         }
 
-        private async Task UpdateFullSyncStatusAsync(long lastSyncId, bool isCompleted)
+        private void UpdateFullSyncStatus(long lastSyncId, bool isCompleted)
         {
             string sql = $@"
                 MERGE {FULL_SYNC_STATE_TABLE} AS target
@@ -490,73 +490,73 @@ namespace dbcollector_api.Services
                     INSERT (SiteId, TableName, LastSyncId, IsCompleted, CreateTime, UpdateTime)
                     VALUES (@siteId, @tableName, @lastSyncId, @isCompleted, GETDATE(), GETDATE());";
 
-            await _targetDbHelper.UpdateAsync(sql,
+            _targetDbHelper.Update(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName),
                 new Parameter("@lastSyncId", lastSyncId),
                 new Parameter("@isCompleted", isCompleted));
         }
 
-        public async Task CollectDataAsync()
+        public void CollectData()
         {
             // 在采集数据前先同步表结构
-            await SyncTableSchemaAsync();
+            SyncTableSchema();
 
             // 1. 检查是否需要全量采集或续采
-            var (needFullSync, lastSyncId) = await CheckFullSyncStatusAsync();
+            var (needFullSync, lastSyncId) = CheckFullSyncStatus();
 
             if (needFullSync)
             {
                 Console.WriteLine($"开始{(lastSyncId == 0 ? "全量采集" : "续采")}厂站 {_siteId}{_sourceTableName}的数据。上次同步ID: {lastSyncId}");
                 
                 // 确保目标表存在
-                var sourceTableSchema = await GetSourceTableSchemaAsync();
-                await CreateTargetTableAsync(sourceTableSchema);
+                var sourceTableSchema = GetSourceTableSchema();
+                CreateTargetTable(sourceTableSchema);
 
                 // 分页获取并同步数据
                 int totalCount = 0;
-                const int pageSize = 1000;
+                const int pageSize = 20;
                 
                 while (true)
                 {
-                    var pageData = await GetAllSourceDataAsync(lastSyncId, pageSize);
+                    var pageData = GetAllSourceData(lastSyncId, pageSize);
                     if (!pageData.Any())
                     {
                         // 全量同步完成,更新状态为已完成
-                        await UpdateFullSyncStatusAsync(lastSyncId, true);
+                        UpdateFullSyncStatus(lastSyncId, true);
                         break;
                     }
 
-                    await BulkInsertDataAsync(pageData);
+                    BulkInsertData(pageData);
                     totalCount += pageData.Count;
                     lastSyncId = pageData.Last().Value<long>(_primaryKeyColumn);
                     
                     // 更新同步状态但标记为未完成
-                    await UpdateFullSyncStatusAsync(lastSyncId, false);
+                    UpdateFullSyncStatus(lastSyncId, false);
                     
                     Console.WriteLine($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集,当前ID: {lastSyncId}");
-                    await Task.Delay(20000);
+                    System.Threading.Thread.Sleep(5000);
                 }
 
                 // 更新Change Tracking版本
-                long currentVersion = await GetCurrentChangeTrackingVersionAsync();
-                await SaveCurrentSyncVersionToConfig(currentVersion);
+                long currentVersion = GetCurrentChangeTrackingVersion();
+                SaveCurrentSyncVersionToConfig(currentVersion);
                 Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的全量采集完成，共采集 {totalCount} 条数据。");
             }
             else 
             {
                 // 1. 检查目标表是否存在或是否包含当前厂站的数据
-                bool targetTableExists = await TargetTableExistsAsync();
-                bool containsSiteData = await TargetTableContainsSiteDataAsync();
+                bool targetTableExists = TargetTableExists();
+                bool containsSiteData = TargetTableContainsSiteData();
 
                 // 2. 如果是第一次采集该厂站的数据
                 if (!targetTableExists || !containsSiteData)
                 {
                     Console.WriteLine($"首次采集厂站 {_siteId}{_sourceTableName}的数据或目标表不存在，执行全量采集并创建/更新目标表结构。");
                     // a. 获取源表结构并进行类型转换
-                    var sourceTableSchema = await GetSourceTableSchemaAsync();
+                    var sourceTableSchema = GetSourceTableSchema();
                     // b. 创建目标表 (如果不存在)
-                    await CreateTargetTableAsync(sourceTableSchema);
+                    CreateTargetTable(sourceTableSchema);
                     // c. 分页获取全量源数据并写入
                     long lastId = 0;
                     int totalCount = 0;
@@ -564,14 +564,14 @@ namespace dbcollector_api.Services
                     
                     while (true)
                     {
-                        var pageData = await GetAllSourceDataAsync(lastId, pageSize);
+                        var pageData = GetAllSourceData(lastId, pageSize);
                         if (!pageData.Any())
                         {
                             break;
                         }
 
                         // d. 写入目标表并标记 siteid
-                        await BulkInsertDataAsync(pageData);
+                        BulkInsertData(pageData);
                         
                         totalCount += pageData.Count;
                         // 获取最后一条记录的ID作为下次查询的起点
@@ -580,19 +580,19 @@ namespace dbcollector_api.Services
                         Console.WriteLine($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集");
                         
                         // 等待20秒后继续下一页采集
-                        await Task.Delay(20000);
+                        System.Threading.Thread.Sleep(20000);
                     }
 
                     // e. 更新 Change Tracking 版本
-                    long currentVersion = await GetCurrentChangeTrackingVersionAsync();
-                    await SaveCurrentSyncVersionToConfig(currentVersion);
+                    long currentVersion = GetCurrentChangeTrackingVersion();
+                    SaveCurrentSyncVersionToConfig(currentVersion);
                     Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的首次全量采集完成，共采集 {totalCount} 条数据。");
                 }
                 else
                 {
                     Console.WriteLine($"开始增量采集厂站 {_siteId}{_sourceTableName}的数据。");
                     // a. 查询变更数据
-                    var changes = await GetChangesAsync();
+                    var changes = GetChanges();
 
 
                     if (changes.Any())
@@ -615,17 +615,17 @@ namespace dbcollector_api.Services
                                 JValue primaryKeyValue = change.Value<JValue>(_primaryKeyColumn);
                                 Console.WriteLine($"厂站 {_siteId}{_sourceTableName}删除记录 (主键: {primaryKeyValue})");
                                 string delsql = $"delete from {_targetTableName} where bz_ct_siteid='{_siteId}' and {_primaryKeyColumn} = '{primaryKeyValue}'";
-                                await _targetDbHelper.DeleteAsync(delsql);
+                                 _targetDbHelper.Delete(delsql);
                             }
                         }
                         // b. 批量插入/更新数据到目标表
                         if (dataToInsert.Any())
                         {
-                            await BulkInsertDataAsync(dataToInsert);
+                            BulkInsertData(dataToInsert);
                         }
                         // 获取并保存当前版本号
-                        long currentVersion = await GetCurrentChangeTrackingVersionAsync();
-                        await SaveCurrentSyncVersionToConfig(currentVersion);
+                        long currentVersion = GetCurrentChangeTrackingVersion();
+                        SaveCurrentSyncVersionToConfig(currentVersion);
                         Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的增量采集完成，处理了 {changes.Count} 条变更。");
                     }
                     else
@@ -640,7 +640,7 @@ namespace dbcollector_api.Services
         /// 检查数据采集的一致性
         /// </summary>
         /// <returns>返回true表示数据一致，false表示数据不一致</returns>
-        private async Task<bool> CheckDataConsistencyAsync()
+        private bool CheckDataConsistency()
         {
             // 获取目标表最后两条记录的ID
             string targetSql = $@"
@@ -657,8 +657,8 @@ namespace dbcollector_api.Services
 
             try
             {
-                var targetResult = await _targetDbHelper.FindAsync(targetSql, new Parameter("@siteId", _siteId));
-                var sourceResult = await _sourceDbHelper.FindAsync(sourceSql);
+                var targetResult = _targetDbHelper.Find(targetSql, new Parameter("@siteId", _siteId));
+                var sourceResult = _sourceDbHelper.Find(sourceSql);
 
                 if (targetResult.Result == null || sourceResult.Result == null || 
                     targetResult.Result.Count < 2 || sourceResult.Result.Count < 2)
