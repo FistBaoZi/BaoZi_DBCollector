@@ -231,6 +231,15 @@ namespace dbcollector_api.Services
                 s.NonReentrant();
                 s.ToRunNow().AndEvery(int.Parse(_cfg["CollectInterval"])).Seconds();
             });
+
+            //每小时调整全量表的状态为未完成，目的是避免全量表一直处于完成状态
+            JobManager.AddJob(() =>
+            {
+                UpdateFullTableIsCompleted();
+            }, s => {
+                s.NonReentrant();
+                s.ToRunEvery(1).Hours().At(0);
+            });
         }
         private void DoCT(int isFull)
         {
@@ -261,6 +270,14 @@ namespace dbcollector_api.Services
                     ct.CollectData();
                 }
             }
+        }
+
+        private void UpdateFullTableIsCompleted()
+        {
+            string sql = $@"
+                UPDATE {FULL_SYNC_STATE_TABLE} 
+                SET IsCompleted = 0, UpdateTime = GETDATE()";
+            DBCenter.UpdateAsync(sql);
         }
     }
 }
