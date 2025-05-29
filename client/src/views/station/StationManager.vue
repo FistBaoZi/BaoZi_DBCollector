@@ -49,7 +49,7 @@
     <a-drawer
       :title=" collectDrawer.currentStation?.Name +'采集配置'"
       placement="right"
-      :width="720"
+      :width="1200"
       v-model:open="collectDrawer.visible"
       @close="closeCollectDrawer"
     >
@@ -58,7 +58,7 @@
           保存配置
         </a-button>
       </template>
-      <div class="transfer-container">
+      <div>
         <a-transfer
           v-model:target-keys="collectDrawer.selectedTables"
           :data-source="collectDrawer.allTables"
@@ -67,7 +67,6 @@
           :render="item => item.title"
           @change="handleTransferChange"
           :titles="['未配置采集的表', '已配置采集的表']"
-          class="custom-transfer"
         >
         </a-transfer>
       </div>
@@ -90,7 +89,6 @@
                 v-model:value="batchCollectModal.stationSearchText"
                 placeholder="搜索厂站"
                 style="width: 200px"
-                @change="handleStationSearch"
               />
             </div>
             <div class="checkbox-container">
@@ -112,7 +110,6 @@
                 v-model:value="batchCollectModal.tableSearchText"
                 placeholder="搜索数据表"
                 style="width: 200px"
-                @change="handleTableSearch"
               />
             </div>
             <div class="checkbox-container">
@@ -245,6 +242,8 @@ const fetchTableList = async (station) => {
     const res = await global.get(`/DBCollector/GetTableList`, { 
       params: { stationId: station.StationId }
     })
+    console.log(res.allTables);
+    
     // 转换数据格式用于穿梭框
     collectDrawer.allTables = res.allTables.map(table => ({
       key: table.name,
@@ -378,16 +377,6 @@ const filteredTables = computed(() => {
   )
 })
 
-// 添加搜索处理函数
-const handleStationSearch = () => {
-  // 搜索框值改变时触发重新计算过滤结果
-  // filteredStations会自动重新计算
-}
-
-const handleTableSearch = () => {
-  // 搜索框值改变时触发重新计算过滤结果
-  // filteredTables会自动重新计算
-}
 
 onMounted(() => {
   fetchStations()
@@ -408,32 +397,21 @@ onMounted(() => {
   margin-top: 4px;
 }
 
-.ant-transfer {
-  justify-content: center;
-  margin: 24px 0;
-}
 
 :deep(.ant-drawer-body) {
   padding: 24px;
   height: calc(100% - 55px); /* 减去抽屉头部的高度 */
 }
 
-:deep(.custom-transfer) {
-  height: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-}
+
 
 :deep(.ant-transfer-list) {
   flex: 1;
-  width: 48% !important;
   height: 80vh;
   margin: 0;
 }
 
 :deep(.ant-transfer-operation) {
-  width: 4%;
   padding: 0 8px;
   display: flex;
   flex-direction: column;
@@ -448,10 +426,7 @@ onMounted(() => {
   height: 100%;
 }
 
-/* 删除不需要的样式 */
-.collect-transfer-container {
-  display: none;
-}
+
 
 .transfer-container {
   height: 100%;
@@ -516,17 +491,14 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  width: 100%;
 }
 
 .checkbox-item {
   margin-bottom: 8px;
-  width: 100%;
 }
 
 :deep(.ant-checkbox-wrapper) {
   margin-left: 0 !important;
-  width: 100%;
   text-align: left;
 }
 
