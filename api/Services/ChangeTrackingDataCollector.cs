@@ -12,8 +12,9 @@ namespace dbcollector_api.Services
         private readonly string _primaryKeyColumn;
         public readonly string _siteId;
         private long _lastSyncVersion; // 用于存储上次同步的 Change Tracking 版本
-        private const string VERSION_TABLE_NAME = "ChangeTrackingVersions";
-        private const string FULL_SYNC_STATE_TABLE = "FullSyncState";
+        private const string VERSION_TABLE_NAME = "BZ_CT_ChangeTrackingVersions";
+        private const string FULL_SYNC_STATE_TABLE = "BZ_CT_FullSyncState";
+        private const string LOG_TABLE_NAME = "BZ_CT_CollectorLogs";  // 添加日志表名称常量
 
         public ChangeTrackingDataCollector(IBaseDBHelper sourceDbHelper, IBaseDBHelper targetDbHelper, string sourceTableName, string targetTableName, string primaryKeyColumn, string siteId)
         {
@@ -62,6 +63,24 @@ namespace dbcollector_api.Services
             _targetDbHelper.Update(sql);
         }
 
+        private void EnsureLogTableExists()
+        {
+            string sql = $@"
+                IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = '{LOG_TABLE_NAME}')
+                BEGIN
+                    CREATE TABLE {LOG_TABLE_NAME} (
+                        Id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                        SiteId VARCHAR(50) NOT NULL,
+                        TableName VARCHAR(100) NOT NULL,
+                        LogLevel VARCHAR(20) NOT NULL,
+                        Message NVARCHAR(MAX) NOT NULL,
+                        CreateTime DATETIME NOT NULL DEFAULT GETDATE()
+                    );
+                    CREATE INDEX IX_{LOG_TABLE_NAME}_Key ON {LOG_TABLE_NAME}(SiteId, TableName, CreateTime);
+                END";
+            _targetDbHelper.Update(sql);
+        }
+
         private void CleanupOldVersions()
         {
             string sql = $@"
@@ -72,6 +91,14 @@ namespace dbcollector_api.Services
             _targetDbHelper.Delete(sql,
                 new Parameter("@siteId", _siteId),
                 new Parameter("@tableName", _sourceTableName));
+        }
+
+        private void CleanupOldLogs()
+        {
+            string sql = $@"
+                DELETE FROM {LOG_TABLE_NAME} 
+                WHERE CreateTime < DATEADD(day, -3, GETDATE())";
+            _targetDbHelper.Delete(sql);
         }
 
         private long GetLastSyncVersionFromConfig()
@@ -232,7 +259,7 @@ namespace dbcollector_api.Services
 
             if (newColumns.Any())
             {
-                Console.WriteLine($"发现 {newColumns.Count} 个新字段，开始同步表结构...");
+                WriteLog($"发现 {newColumns.Count} 个新字段，开始同步表结构...");
                 foreach (var col in newColumns)
                 {
                     string alterSql = $"ALTER TABLE {_targetTableName} ADD {col.Key} {col.Value};";
@@ -241,16 +268,16 @@ namespace dbcollector_api.Services
                         var result = _targetDbHelper.Update(alterSql);
                         if (string.IsNullOrWhiteSpace(result.Message))
                         {
-                            Console.WriteLine($"成功添加字段: {col.Key} {col.Value}");
+                            WriteLog($"成功添加字段: {col.Key} {col.Value}");
                         }
                         else
                         {
-                            Console.WriteLine($"添加字段失败 {col.Key}: {result.Message}");
+                            WriteLog($"添加字段失败 {col.Key}: {result.Message}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"添加字段失败 {col.Key}: {ex.Message}");
+                        WriteLog($"添加字段失败 {col.Key}: {ex.Message}");
                     }
                 }
             }
@@ -276,11 +303,11 @@ namespace dbcollector_api.Services
                 var result = _targetDbHelper.Update(createTableSql);
                 if (!string.IsNullOrWhiteSpace(result.Message))
                 {
-                    Console.WriteLine($"创建目标表 {_targetTableName} 失败: {result.Message}");
+                    WriteLog($"创建目标表 {_targetTableName} 失败: {result.Message}");
                 }
                 else
                 {
-                    Console.WriteLine($"目标表 {_targetTableName} 创建成功。");
+                    WriteLog($"目标表 {_targetTableName} 创建成功。");
                 }
                 return;
             }
@@ -296,7 +323,7 @@ namespace dbcollector_api.Services
             // 添加缺失的字段
             if (missingColumns.Any())
             {
-                Console.WriteLine($"在目标表 {_targetTableName} 中发现 {missingColumns.Count} 个新字段，开始添加...");
+                WriteLog($"在目标表 {_targetTableName} 中发现 {missingColumns.Count} 个新字段，开始添加...");
                 foreach (var col in missingColumns)
                 {
                     string alterSql = $"ALTER TABLE {_targetTableName} ADD {col.Key} {col.Value};";
@@ -305,16 +332,16 @@ namespace dbcollector_api.Services
                         var result = _targetDbHelper.Update(alterSql);
                         if (string.IsNullOrWhiteSpace(result.Message))
                         {
-                            Console.WriteLine($"成功添加字段: {col.Key} {col.Value}");
+                            WriteLog($"成功添加字段: {col.Key} {col.Value}");
                         }
                         else
                         {
-                            Console.WriteLine($"添加字段失败 {col.Key}: {result.Message}");
+                            WriteLog($"添加字段失败 {col.Key}: {result.Message}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"添加字段失败 {col.Key}: {ex.Message}");
+                        WriteLog($"添加字段失败 {col.Key}: {ex.Message}");
                     }
                 }
             }
@@ -330,7 +357,7 @@ namespace dbcollector_api.Services
             }
             else
             {
-                Console.WriteLine($"获取当前 Change Tracking 版本失败 (SiteId: {_siteId}): {result.Message}");
+                WriteLog($"获取当前 Change Tracking 版本失败 (SiteId: {_siteId}): {result.Message}");
                 return -1;
             }
         }
@@ -339,7 +366,7 @@ namespace dbcollector_api.Services
         {
             if (_lastSyncVersion == 0)
             {
-                Console.WriteLine($"尚未进行首次同步 (SiteId: {_siteId})。");
+                WriteLog($"尚未进行首次同步 (SiteId: {_siteId})。");
                 return GetAllSourceData();
             }
 
@@ -355,7 +382,7 @@ namespace dbcollector_api.Services
             }
             else
             {
-                Console.WriteLine($"查询变更失败 (SiteId: {_siteId}): {result.Message}");
+                WriteLog($"查询变更失败 (SiteId: {_siteId}): {result.Message}");
                 return new JArray();
             }
         }
@@ -368,6 +395,24 @@ namespace dbcollector_api.Services
                            ORDER BY {_primaryKeyColumn}";
             var result = _sourceDbHelper.Find(sql, new Parameter("@lastId", lastId));
             return result.Result ?? new JArray();
+        }
+
+        private void WriteLog(string message, string logLevel = "INFO")
+        {
+            EnsureLogTableExists();
+            
+            string sql = $@"
+                INSERT INTO {LOG_TABLE_NAME} (SiteId, TableName, LogLevel, Message, CreateTime)
+                VALUES (@siteId, @tableName, @logLevel, @message, GETDATE())";
+
+            _targetDbHelper.Insert(sql,
+                new Parameter("@siteId", _siteId),
+                new Parameter("@tableName", _sourceTableName),
+                new Parameter("@logLevel", logLevel),
+                new Parameter("@message", message));
+
+            // 同时输出到控制台
+            Console.WriteLine($"[{logLevel}] {message}");
         }
 
         private void BulkInsertData(JArray dataToInsert)
@@ -432,7 +477,7 @@ namespace dbcollector_api.Services
                         var updateResult = _targetDbHelper.Update(updateSql, parameters.ToArray());
                         if (!string.IsNullOrWhiteSpace(updateResult.Message))
                         {
-                            Console.WriteLine($"更新数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {updateResult.Message}");
+                            WriteLog($"更新数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {updateResult.Message}", "ERROR");
                         }
                     }
                     else
@@ -440,17 +485,16 @@ namespace dbcollector_api.Services
                         var insertResult = _targetDbHelper.Insert(insertSql, parameters.ToArray());
                         if (!string.IsNullOrWhiteSpace(insertResult.Message))
                         {
-                            Console.WriteLine($"插入数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {insertResult.Message}");
+                            WriteLog($"插入数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {insertResult.Message}", "ERROR");
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"处理数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {ex.Message}");
-                    // TODO: 考虑记录失败数据或进行重试
+                    WriteLog($"处理数据失败 (SiteId: {_siteId}, 主键: {data[_primaryKeyColumn]}): {ex.Message}", "ERROR");
                 }
             }
-            Console.WriteLine($"成功处理 {dataToInsert.Count} 条数据到 {_targetTableName} (SiteId: {_siteId})。");
+            WriteLog($"成功处理 {dataToInsert.Count} 条数据到 {_targetTableName} (SiteId: {_siteId})。");
         }
 
         private (bool needFullSync, long lastSyncId) CheckFullSyncStatus()
@@ -499,140 +543,150 @@ namespace dbcollector_api.Services
 
         public void CollectData()
         {
-            // 在采集数据前先同步表结构
-            SyncTableSchema();
-
-            // 1. 检查是否需要全量采集或续采
-            var (needFullSync, lastSyncId) = CheckFullSyncStatus();
-
-            if (needFullSync)
+            try 
             {
-                Console.WriteLine($"开始{(lastSyncId == 0 ? "全量采集" : "续采")}厂站 {_siteId}{_sourceTableName}的数据。上次同步ID: {lastSyncId}");
-                
-                // 确保目标表存在
-                var sourceTableSchema = GetSourceTableSchema();
-                CreateTargetTable(sourceTableSchema);
+                CleanupOldLogs(); // 清理7天前的日志
 
-                // 分页获取并同步数据
-                int totalCount = 0;
-                const int pageSize = 20;
-                
-                while (true)
+                // 在采集数据前先同步表结构
+                SyncTableSchema();
+
+                // 1. 检查是否需要全量采集或续采
+                var (needFullSync, lastSyncId) = CheckFullSyncStatus();
+
+                if (needFullSync)
                 {
-                    var pageData = GetAllSourceData(lastSyncId, pageSize);
-                    if (!pageData.Any())
-                    {
-                        // 全量同步完成,更新状态为已完成
-                        UpdateFullSyncStatus(lastSyncId, true);
-                        break;
-                    }
-
-                    BulkInsertData(pageData);
-                    totalCount += pageData.Count;
-                    lastSyncId = pageData.Last().Value<long>(_primaryKeyColumn);
+                    WriteLog($"开始{(lastSyncId == 0 ? "全量采集" : "续采")}厂站 {_siteId}{_sourceTableName}的数据。上次同步ID: {lastSyncId}");
                     
-                    // 更新同步状态但标记为未完成
-                    UpdateFullSyncStatus(lastSyncId, false);
-                    
-                    Console.WriteLine($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集,当前ID: {lastSyncId}");
-                    System.Threading.Thread.Sleep(5000);
-                }
-
-                // 更新Change Tracking版本
-                long currentVersion = GetCurrentChangeTrackingVersion();
-                SaveCurrentSyncVersionToConfig(currentVersion);
-                Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的全量采集完成，共采集 {totalCount} 条数据。");
-            }
-            else 
-            {
-                // 1. 检查目标表是否存在或是否包含当前厂站的数据
-                bool targetTableExists = TargetTableExists();
-                bool containsSiteData = TargetTableContainsSiteData();
-
-                // 2. 如果是第一次采集该厂站的数据
-                if (!targetTableExists || !containsSiteData)
-                {
-                    Console.WriteLine($"首次采集厂站 {_siteId}{_sourceTableName}的数据或目标表不存在，执行全量采集并创建/更新目标表结构。");
-                    // a. 获取源表结构并进行类型转换
+                    // 确保目标表存在
                     var sourceTableSchema = GetSourceTableSchema();
-                    // b. 创建目标表 (如果不存在)
                     CreateTargetTable(sourceTableSchema);
-                    // c. 分页获取全量源数据并写入
-                    long lastId = 0;
+
+                    // 分页获取并同步数据
                     int totalCount = 0;
-                    const int pageSize = 1000;
+                    const int pageSize = 20;
                     
                     while (true)
                     {
-                        var pageData = GetAllSourceData(lastId, pageSize);
+                        var pageData = GetAllSourceData(lastSyncId, pageSize);
                         if (!pageData.Any())
                         {
+                            // 全量同步完成,更新状态为已完成
+                            UpdateFullSyncStatus(lastSyncId, true);
                             break;
                         }
 
-                        // d. 写入目标表并标记 siteid
                         BulkInsertData(pageData);
-                        
                         totalCount += pageData.Count;
-                        // 获取最后一条记录的ID作为下次查询的起点
-                        lastId = pageData.Last().Value<long>(_primaryKeyColumn);
+                        lastSyncId = pageData.Last().Value<long>(_primaryKeyColumn);
                         
-                        Console.WriteLine($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集");
-                        
-                        // 等待20秒后继续下一页采集
-                        System.Threading.Thread.Sleep(20000);
+                        // 更新同步状态但标记为未完成
+                        UpdateFullSyncStatus(lastSyncId, false);
+
+                        WriteLog($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集,当前ID: {lastSyncId}");
+                        System.Threading.Thread.Sleep(5000);
                     }
 
-                    // e. 更新 Change Tracking 版本
+                    // 更新Change Tracking版本
                     long currentVersion = GetCurrentChangeTrackingVersion();
                     SaveCurrentSyncVersionToConfig(currentVersion);
-                    Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的首次全量采集完成，共采集 {totalCount} 条数据。");
+                    WriteLog($"厂站 {_siteId}{_sourceTableName}的全量采集完成，共采集 {totalCount} 条数据。");
                 }
-                else
+                else 
                 {
-                    Console.WriteLine($"开始增量采集厂站 {_siteId}{_sourceTableName}的数据。");
-                    // a. 查询变更数据
-                    var changes = GetChanges();
+                    // 1. 检查目标表是否存在或是否包含当前厂站的数据
+                    bool targetTableExists = TargetTableExists();
+                    bool containsSiteData = TargetTableContainsSiteData();
 
-
-                    if (changes.Any())
+                    // 2. 如果是第一次采集该厂站的数据
+                    if (!targetTableExists || !containsSiteData)
                     {
-                        JArray dataToInsert = new JArray();
-                        foreach (var change in changes)
+                        WriteLog($"首次采集厂站 {_siteId}{_sourceTableName}的数据或目标表不存在，执行全量采集并创建/更新目标表结构。");
+                        // a. 获取源表结构并进行类型转换
+                        var sourceTableSchema = GetSourceTableSchema();
+                        // b. 创建目标表 (如果不存在)
+                        CreateTargetTable(sourceTableSchema);
+                        // c. 分页获取全量源数据并写入
+                        long lastId = 0;
+                        int totalCount = 0;
+                        const int pageSize = 1000;
+                        
+                        while (true)
                         {
-                            string operation = change.Value<string>("SYS_CHANGE_OPERATION");
-                            if (operation == "I" || operation == "U")
+                            var pageData = GetAllSourceData(lastId, pageSize);
+                            if (!pageData.Any())
                             {
-                                JObject rowData = new JObject();
-                                foreach (var property in JObject.FromObject(change).Properties().Where(p => p.Name != "SYS_CHANGE_OPERATION"))
-                                {
-                                    rowData[property.Name] = property.Value;
-                                }
-                                dataToInsert.Add(rowData);
+                                break;
                             }
-                            else if (operation == "D")
-                            {
-                                JValue primaryKeyValue = change.Value<JValue>(_primaryKeyColumn);
-                                Console.WriteLine($"厂站 {_siteId}{_sourceTableName}删除记录 (主键: {primaryKeyValue})");
-                                string delsql = $"delete from {_targetTableName} where bz_ct_siteid='{_siteId}' and {_primaryKeyColumn} = '{primaryKeyValue}'";
-                                 _targetDbHelper.Delete(delsql);
-                            }
+
+                            // d. 写入目标表并标记 siteid
+                            BulkInsertData(pageData);
+                            
+                            totalCount += pageData.Count;
+                            // 获取最后一条记录的ID作为下次查询的起点
+                            lastId = pageData.Last().Value<long>(_primaryKeyColumn);
+
+                            WriteLog($"厂站 {_siteId}{_sourceTableName} 已完成 {totalCount} 条数据采集");
+                            
+                            // 等待20秒后继续下一页采集
+                            System.Threading.Thread.Sleep(20000);
                         }
-                        // b. 批量插入/更新数据到目标表
-                        if (dataToInsert.Any())
-                        {
-                            BulkInsertData(dataToInsert);
-                        }
-                        // 获取并保存当前版本号
+
+                        // e. 更新 Change Tracking 版本
                         long currentVersion = GetCurrentChangeTrackingVersion();
                         SaveCurrentSyncVersionToConfig(currentVersion);
-                        Console.WriteLine($"厂站 {_siteId}{_sourceTableName}的增量采集完成，处理了 {changes.Count} 条变更。");
+                        WriteLog($"厂站 {_siteId}{_sourceTableName}的首次全量采集完成，共采集 {totalCount} 条数据。");
                     }
                     else
                     {
-                        Console.WriteLine($"厂站 {_siteId}{_sourceTableName}没有新的数据变更。");
+                        WriteLog($"开始增量采集厂站 {_siteId}{_sourceTableName}的数据。");
+                        // a. 查询变更数据
+                        var changes = GetChanges();
+
+
+                        if (changes.Any())
+                        {
+                            JArray dataToInsert = new JArray();
+                            foreach (var change in changes)
+                            {
+                                string operation = change.Value<string>("SYS_CHANGE_OPERATION");
+                                if (operation == "I" || operation == "U")
+                                {
+                                    JObject rowData = new JObject();
+                                    foreach (var property in JObject.FromObject(change).Properties().Where(p => p.Name != "SYS_CHANGE_OPERATION"))
+                                    {
+                                        rowData[property.Name] = property.Value;
+                                    }
+                                    dataToInsert.Add(rowData);
+                                }
+                                else if (operation == "D")
+                                {
+                                    JValue primaryKeyValue = change.Value<JValue>(_primaryKeyColumn);
+                                    WriteLog($"厂站 {_siteId}{_sourceTableName}删除记录 (主键: {primaryKeyValue})");
+                                    string delsql = $"delete from {_targetTableName} where bz_ct_siteid='{_siteId}' and {_primaryKeyColumn} = '{primaryKeyValue}'";
+                                     _targetDbHelper.Delete(delsql);
+                                }
+                            }
+                            // b. 批量插入/更新数据到目标表
+                            if (dataToInsert.Any())
+                            {
+                                BulkInsertData(dataToInsert);
+                            }
+                            // 获取并保存当前版本号
+                            long currentVersion = GetCurrentChangeTrackingVersion();
+                            SaveCurrentSyncVersionToConfig(currentVersion);
+                            WriteLog($"厂站 {_siteId}{_sourceTableName}的增量采集完成，处理了 {changes.Count} 条变更。");
+                        }
+                        else
+                        {
+                            WriteLog($"厂站 {_siteId}{_sourceTableName}没有新的数据变更。");
+                        }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                WriteLog($"数据采集过程发生异常: {ex.Message}", "ERROR");
+                throw;
             }
         }
 
@@ -663,7 +717,7 @@ namespace dbcollector_api.Services
                 if (targetResult.Result == null || sourceResult.Result == null || 
                     targetResult.Result.Count < 2 || sourceResult.Result.Count < 2)
                 {
-                    Console.WriteLine($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 记录数不足，无法进行一致性检查");
+                    WriteLog($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 记录数不足，无法进行一致性检查");
                     return true;
                 }
 
@@ -672,9 +726,9 @@ namespace dbcollector_api.Services
 
                 if (targetSecondLastId != sourceSecondLastId)
                 {
-                    Console.WriteLine($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 数据采集异常");
-                    Console.WriteLine($"源表倒数第二条记录ID: {sourceSecondLastId}");
-                    Console.WriteLine($"目标表倒数第二条记录ID: {targetSecondLastId}");
+                    WriteLog($"警告：表 {_sourceTableName} (SiteId: {_siteId}) 数据采集异常");
+                    WriteLog($"源表倒数第二条记录ID: {sourceSecondLastId}");
+                    WriteLog($"目标表倒数第二条记录ID: {targetSecondLastId}");
                     return false;
                 }
 
@@ -682,7 +736,7 @@ namespace dbcollector_api.Services
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"检查数据一致性时发生错误 (SiteId: {_siteId}): {ex.Message}");
+                WriteLog($"检查数据一致性时发生错误 (SiteId: {_siteId}): {ex.Message}");
                 return false;
             }
         }

@@ -53,5 +53,31 @@ namespace dbcollector_api.Controllers
         {
             await _service.SaveCollectConfigAsync(stationId, tables);
         }
+
+        public async Task<IActionResult> BatchSaveCollectConfig(List<string> stationIds, List<string> tables)
+        {
+            try
+            {
+                await _service.BatchSaveCollectConfigAsync(stationIds, tables);
+                return Ok(new { message = "批量添加采集配置成功" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
+        }
+
+        public async Task<IActionResult> GetCollectorLogs(string? stationId = null, string? tableName = null, string? logLevel = null, int page = 1, int pageSize = 20)
+        {
+            try
+            {
+                var result = await _service.GetCollectorLogsAsync(stationId, tableName, logLevel, page, pageSize);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
+        }
     }
 }

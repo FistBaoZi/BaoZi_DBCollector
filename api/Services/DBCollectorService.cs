@@ -1,24 +1,28 @@
 ﻿using BaoZi.Tools.DBHelper;
 using BaoZi.Tools.TimerTask;
 using dbcollector_api.Models;
+using dbcollector_api.Utils;
 using FluentScheduler;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace dbcollector_api.Services
 {
     public class DBCollectorService
     {
+        private readonly IWebHostEnvironment _env;
         private readonly IBaseDBHelper DBCenter;
-        private const string STATION_TABLE_NAME = "StationConfig";
-        private const string TABLE_CONFIG_NAME = "CollectTableConfig";
-        private const string FULL_SYNC_STATE_TABLE = "FullSyncState";
+        private const string STATION_TABLE_NAME = "BZ_CT_StationConfig";
+        private const string TABLE_CONFIG_NAME = "BZ_CT_CollectTableConfig";
+        private const string FULL_SYNC_STATE_TABLE = "BZ_CT_FullSyncState";
         private readonly TimerTaskService TimerTaskService;
         private readonly IConfiguration _cfg;
-        public DBCollectorService(IBaseDBHelper baseDBHelper, TimerTaskService timerTaskService, IConfiguration cfg)
+        public DBCollectorService(IBaseDBHelper baseDBHelper, TimerTaskService timerTaskService, IConfiguration cfg, IWebHostEnvironment env)
         {
             DBCenter = baseDBHelper;
             TimerTaskService = timerTaskService;
             _cfg = cfg;
+            _env = env;
         }
 
         public async Task<StationConfig> GetStationByIdAsync(int id)
@@ -212,6 +216,36 @@ namespace dbcollector_api.Services
             }
         }
 
+        public async Task BatchSaveCollectConfigAsync(List<string> stationIds, List<string> tables)
+        {
+            await EnsureTableConfigExists();
+
+            foreach (var stationId in stationIds)
+            {
+                var station = await GetStationByIdAsync(stationId);
+                if (station == null) continue;
+
+                // 获取已存在的采集配置
+                string existingSql = $"SELECT TableName FROM {TABLE_CONFIG_NAME} WHERE StationId = @stationId";
+                var existingTables = await DBCenter.FindAsync(existingSql, new Parameter("@stationId", stationId));
+                var existingTableNames = existingTables.Result?.Select(t => t.Value<string>("TableName")).ToList() ?? new List<string>();
+
+                // 只添加不存在的表配置
+                var newTables = tables.Where(t => !existingTableNames.Contains(t));
+
+                foreach (var table in newTables)
+                {
+                    string insertSql = $@"
+                        INSERT INTO {TABLE_CONFIG_NAME} (StationId, TableName, CreateTime)
+                        VALUES (@stationId, @tableName, GETDATE())";
+
+                    await DBCenter.InsertAsync(insertSql,
+                        new Parameter("@stationId", stationId),
+                        new Parameter("@tableName", table));
+                }
+            }
+        }
+
        
         public void InitCTTimerTask()
         {
@@ -243,8 +277,20 @@ namespace dbcollector_api.Services
         }
         private void DoCT(int isFull)
         {
+            //判断证书是否有效，如果证书无效，则不执行采集任务
+            //解析证书内容
+            var licenseInfo = GetLicenseInfo();
+            if (licenseInfo == null || licenseInfo.EndDate<DateTime.Now || licenseInfo.StartDate>DateTime.Now)
+            {
+                return; // 证书无效，直接返回
+            }
             //获取所有站点
             var stations = GetStationList();
+            //如果厂站个数大于证书限制的个数，则只取证书限制个数的厂站
+            if (stations.Count() > licenseInfo.MaxStations)
+            {
+                stations = stations.Take(licenseInfo.MaxStations).ToList();
+            }
             //循环遍历站点
             foreach (var station in stations)
             {
@@ -278,6 +324,83 @@ namespace dbcollector_api.Services
                 UPDATE {FULL_SYNC_STATE_TABLE} 
                 SET IsCompleted = 0, UpdateTime = GETDATE()";
             DBCenter.UpdateAsync(sql);
+        }
+
+        private LicenseInfo GetLicenseInfo()
+        {
+            try
+            {
+                var licensePath = Path.Combine(_env.ContentRootPath, "license.lic");
+                if (!System.IO.File.Exists(licensePath))
+                {
+                    return null;
+                }
+
+                var licenseContent = System.IO.File.ReadAllText(licensePath);
+
+                var decryptedContent = RSAHelper.DecryptWithPrivateKey(licenseContent);
+                var licenseInfo =  JObject.Parse(decryptedContent).ToObject<LicenseInfo>();
+                return licenseInfo;
+               
+            }
+            catch (Exception ex)
+            {
+                return  null;
+            }
+        }
+
+        public async Task<dynamic> GetCollectorLogsAsync(string? stationId, string? tableName, string? logLevel, int page, int pageSize)
+        {
+            var conditions = new List<string>();
+            var parameters = new List<Parameter>();
+
+            if (!string.IsNullOrEmpty(stationId))
+            {
+                conditions.Add("l.SiteId = @siteId");
+                parameters.Add(new Parameter("@siteId", stationId));
+            }
+            if (!string.IsNullOrEmpty(tableName))
+            {
+                conditions.Add("l.TableName = @tableName");
+                parameters.Add(new Parameter("@tableName", tableName));
+            }
+            if (!string.IsNullOrEmpty(logLevel))
+            {
+                conditions.Add("l.LogLevel = @logLevel");
+                parameters.Add(new Parameter("@logLevel", logLevel));
+            }
+
+            string whereClause = conditions.Any() ? $"WHERE {string.Join(" AND ", conditions)}" : "";
+            
+            // 获取总记录数
+            string countSql = $@"
+                SELECT COUNT(1) AS Total 
+                FROM BZ_CT_CollectorLogs l
+                LEFT JOIN {STATION_TABLE_NAME} s ON l.SiteId = s.StationId
+                {whereClause}";
+            var totalResult = await DBCenter.FindOneAsync(countSql, parameters.ToArray());
+            int total = totalResult.Result["Total"].ToObject<int>();
+
+            // 使用ROW_NUMBER()实现分页
+            string sql = $@"
+                WITH LogsCTE AS (
+                    SELECT l.*, s.Name as StationName,
+                           ROW_NUMBER() OVER (ORDER BY l.CreateTime DESC) as RowNum
+                    FROM BZ_CT_CollectorLogs l
+                    LEFT JOIN {STATION_TABLE_NAME} s ON l.SiteId = s.StationId
+                    {whereClause}
+                )
+                SELECT * FROM LogsCTE 
+                WHERE RowNum BETWEEN {(page - 1) * pageSize + 1} AND {page * pageSize}
+                ORDER BY CreateTime DESC";
+
+            var logs = await DBCenter.FindAsync(sql, parameters.ToArray());
+
+            return new
+            {
+                total,
+                rows = logs.Result
+            };
         }
     }
 }

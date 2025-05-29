@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using dbcollector_api.Services;
 using BaoZi.Tools.WebApiInit;
 using BaoZi.Tools.TimerTask;
+using dbcollector_api.Utils;
 
 
 var builder = WebApplicationFactory.CreateBuilderWithWindowService();
@@ -21,6 +22,7 @@ var dbcenter = new SqlServerDBHelper(builder.Configuration.GetConnectionString("
 builder.Services.AddSingleton<IBaseDBHelper>(dbcenter);
 TimerTaskService timerTaskService = new TimerTaskService();
 builder.Services.AddSingleton(timerTaskService);
+builder.Services.AddScoped<LicenseService>();
 
 
 

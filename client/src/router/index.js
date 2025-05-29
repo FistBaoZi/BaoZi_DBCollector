@@ -8,8 +8,49 @@ const routes = [
   },
   {
     path: '/',
-    name: 'home',
-    component: () => import('../views/Home.vue')
+    component: () => import('../views/Home.vue'),
+    children: [
+      {
+        path: '',
+        redirect: '/dashboard'
+      },
+      {
+        path: 'dashboard',
+        name: 'Dashboard',
+        component: () => import('../views/dashboard/Dashboard.vue'),
+        meta: { title: '仪表盘' }
+      },
+      {
+        path: 'station',
+        name: 'Station',
+        component: () => import('../views/station/StationManager.vue'),
+        meta: { title: '厂站管理' }
+      },
+      {
+        path: 'report',
+        name: 'Report',
+        component: () => import('../views/report/Report.vue'),
+        meta: { title: '报表与分析' }
+      },
+      {
+        path: 'api',
+        name: 'ApiManager',
+        component: () => import('../views/api/ApiManager.vue'),
+        meta: { title: 'API管理' }
+      },
+      {
+        path: 'license',
+        name: 'License',
+        component: () => import('../views/LicenseManagement.vue'),
+        meta: { title: '授权管理' }
+      },
+      {
+        path: 'donate',
+        name: 'Donate',
+        component: () => import('../views/donate/Donate.vue'),
+        meta: { title: '捐赠支持' }
+      }
+    ]
   },
   {
     path: '/404',
